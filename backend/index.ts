@@ -8,6 +8,14 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 // 加载环境变量
 dotenv.config({ path: './backend/.env' });
 
+// 调试环境变量
+console.log('🔧 环境变量检查:');
+console.log(`   OpenAI API Key: ${process.env.OPENAI_API_KEY ? '已配置' : '未配置'}`);
+console.log(`   Unsplash Access Key: ${process.env.UNSPLASH_ACCESS_KEY ? '已配置' : '未配置'}`);
+console.log(`   Unsplash Secret Key: ${process.env.UNSPLASH_SECRET_KEY ? '已配置' : '未配置'}`);
+console.log(`   HTTP Proxy: ${process.env.HTTP_PROXY || '未配置'}`);
+console.log(`   HTTPS Proxy: ${process.env.HTTPS_PROXY || '未配置'}`);
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -171,6 +179,9 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
 // 搜索 Unsplash 图片
 async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> {
+    console.log(`🔍 开始搜索关键词: ${keywords}`);
+    console.log(`🔑 Unsplash Access Key: ${UNSPLASH_ACCESS_KEY ? '已配置' : '未配置'}`);
+    
     if (!UNSPLASH_ACCESS_KEY) {
         throw new Error('Unsplash Access Key 未配置');
     }
@@ -187,10 +198,15 @@ async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> 
             }
         });
 
+        console.log(`✅ Unsplash 搜索成功，找到 ${response.data.results.length} 张图片`);
         return response.data.results;
-    } catch (error) {
-        console.error('Unsplash 搜索失败:', error);
-        throw new Error('Unsplash 图片搜索失败');
+    } catch (error: any) {
+        console.error('❌ Unsplash 搜索失败:', error.message);
+        if (error.response) {
+            console.error('响应状态:', error.response.status);
+            console.error('响应数据:', error.response.data);
+        }
+        throw new Error(`Unsplash 图片搜索失败: ${error.message}`);
     }
 }
 
@@ -257,11 +273,12 @@ app.use((req, res) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
+const server = app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🚀 AI图像搜索器服务已启动`);
-    console.log(`📍 服务地址: http://localhost:${PORT}`);
-    console.log(`🔍 健康检查: http://localhost:${PORT}/health`);
-    console.log(`🎨 图片搜索: POST http://localhost:${PORT}/search-images`);
+    console.log(`📍 服务地址: http://0.0.0.0:${PORT}`);
+    console.log(`🔍 健康检查: http://0.0.0.0:${PORT}/health`);
+    console.log(`🎨 图片搜索: POST http://0.0.0.0:${PORT}/search-images`);
+    console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`);
     
     // 检查环境变量
     if (!process.env.OPENAI_API_KEY) {
@@ -270,6 +287,15 @@ app.listen(PORT, () => {
     if (!process.env.UNSPLASH_ACCESS_KEY) {
         console.warn('⚠️  Unsplash Access Key 未配置，图片搜索功能将不可用');
     }
+});
+
+// 优雅关闭
+process.on('SIGTERM', () => {
+    console.log('收到 SIGTERM 信号，正在关闭服务器...');
+    server.close(() => {
+        console.log('服务器已关闭');
+        process.exit(0);
+    });
 });
 
 export default app;
