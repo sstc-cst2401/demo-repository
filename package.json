@@ -1,9 +1,26 @@
 {
-  "name": "demo-repo",
-  "version": "0.2.0",
-  "description": "A sample package.json",
-  "dependencies": {
-    "@primer/css": "17.0.1"
+  "name": "ai-image-demo",
+  "version": "1.0.0",
+  "description": "AI图像搜索项目 - 中文描述转英文关键词，搜索并选择最佳图片",
+  "main": "backend/index.ts",
+  "scripts": {
+    "dev": "ts-node backend/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
   },
-  "license": "MIT"
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "https-proxy-agent": "^7.0.6",
+    "openai": "^4.20.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.3.0"
+  }
 }
