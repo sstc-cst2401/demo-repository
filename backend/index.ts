@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import OpenAI from 'openai';
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import path from 'path';
 
 // 加载环境变量
 dotenv.config({ path: './backend/.env' });
@@ -14,6 +15,14 @@ const PORT = process.env.PORT || 3000;
 // 中间件
 app.use(cors());
 app.use(express.json());
+
+// 静态文件服务
+app.use(express.static(path.join(__dirname, '../frontend')));
+
+// 根路径路由 - 提供前端页面
+app.get('/', (req, res) => {
+    res.sendFile('index.html', { root: path.join(__dirname, '../frontend') });
+});
 
 // 初始化 OpenAI 客户端
 const openaiConfig: any = {
@@ -142,18 +151,28 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
+            model: "gpt-4o",
             messages: [
                 {
                     role: "system",
-                    content: "你是一个专业的图像搜索关键词翻译专家。请将用户的中文描述翻译成适合图像搜索的英文关键词，关键词应该简洁、准确、包含主要视觉元素。只返回英文关键词，不要其他解释。"
+                    content: `你是一个专业的图像搜索专家。你的任务是：
+1. 首先分析用户的中文描述，理解用户想要什么样的图片（风格、主题、情感、场景等）
+2. 然后基于这个理解，生成最适合图像搜索的英文关键词
+
+关键词要求：
+- 简洁准确，包含主要视觉元素
+- 考虑图片的风格、主题、情感、场景、颜色等
+- 使用常见的图像搜索词汇
+- 避免过于抽象的描述，专注于可视觉化的元素
+
+只返回英文关键词，不要其他解释。`
                 },
                 {
                     role: "user",
-                    content: `请将以下中文描述翻译成英文搜索关键词：${chineseDescription}`
+                    content: `请分析以下中文描述并生成英文搜索关键词：${chineseDescription}`
                 }
             ],
-            max_tokens: 100,
+            max_tokens: 1500,
             temperature: 0.3
         });
 
@@ -205,6 +224,78 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
     }
 
     try {
+        // 构建详细的图片信息列表，包含URL和描述
+        const imageDetails = images.map((image, index) => {
+            const description = image.alt_description || image.description || '无描述';
+            const photographer = image.user.name;
+            const imageUrl = image.urls.regular;
+            
+            return `${index + 1}. 图片URL: ${imageUrl}\n   描述: ${description}\n   摄影师: ${photographer}`;
+        }).join('\n\n');
+
+        const response = await openai.chat.completions.create({
+            model: "gpt-o3",
+            messages: [
+                {
+                    role: "system",
+                    content: `你是一个专业的图像选择专家。你的任务是：
+1. 仔细查看用户提供的所有图片
+2. 分析每张图片的视觉内容、风格、主题、情感等
+3. 根据用户的中文描述，选择最符合用户需求的图片
+
+选择标准：
+- 图片内容与用户描述的主题匹配度
+- 图片风格和情感与用户需求的一致性
+- 图片质量和视觉效果
+- 整体符合度（综合考虑所有因素）
+
+请仔细分析每张图片，然后选择最符合用户描述的一张。只返回图片编号（1-${images.length}），不要其他解释。`
+                },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: `用户描述：${originalDescription}\n\n请查看以下图片并选择最符合描述的图片编号（1-${images.length}）：`
+                        },
+                        ...images.map(image => ({
+                            type: "image_url" as const,
+                            image_url: {
+                                url: image.urls.regular
+                            }
+                        }))
+                    ]
+                }
+            ],
+            max_tokens: 1000,
+            temperature: 0.1
+        });
+
+        const result = response.choices[0].message.content?.trim();
+        if (!result) {
+            return 0; // 默认选择第一张
+        }
+
+        // 解析返回的编号
+        const match = result.match(/\d+/);
+        if (match) {
+            const index = parseInt(match[0]) - 1;
+            return Math.max(0, Math.min(index, images.length - 1));
+        }
+
+        return 0; // 默认选择第一张
+    } catch (error) {
+        console.error('选择最佳图片失败:', error);
+        
+        // 如果GPT-4 Vision不可用，回退到基于描述的选择
+        console.log('回退到基于描述的选择方法');
+        return await selectBestImageFallback(originalDescription, images);
+    }
+}
+
+// 回退方法：基于图片描述选择最佳图片
+async function selectBestImageFallback(originalDescription: string, images: UnsplashImage[]): Promise<number> {
+    try {
         // 构建图片描述列表
         const imageDescriptions = images.map((image, index) => 
             `${index + 1}. ${image.alt_description || image.description || '无描述'}`
@@ -240,7 +331,7 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
 
         return 0; // 默认选择第一张
     } catch (error) {
-        console.error('选择最佳图片失败:', error);
+        console.error('回退选择方法也失败:', error);
         return 0; // 出错时默认选择第一张
     }
 }
