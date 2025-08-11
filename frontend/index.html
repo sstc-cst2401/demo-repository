@@ -280,7 +280,7 @@
         <div class="results-section" id="resultsSection" style="display: none;">
             <div class="results-header">
                 <h2>搜索结果</h2>
-                <p>以下是AI为您找到的相关图片，绿色标识为最佳匹配</p>
+                <p>以下是AI为您找到的相关图片，AI通过分析每张图片的视觉内容选择了最符合您需求的图片（绿色标识）</p>
             </div>
             <div id="translationInfo"></div>
             <div id="imagesGrid" class="images-grid"></div>
@@ -333,7 +333,8 @@
             if (data.translation) {
                 translationInfo.innerHTML = `
                     <strong>中文描述：</strong>${data.originalDescription}<br>
-                    <strong>英文关键词：</strong>${data.translation}
+                    <strong>AI分析生成的英文关键词：</strong>${data.translation}<br>
+                    <small style="color: #666;">AI首先分析了您的需求，然后生成了最适合搜索的关键词</small>
                 `;
             }
 

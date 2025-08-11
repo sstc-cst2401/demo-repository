@@ -2,12 +2,11 @@
   "name": "ai-image-demo",
   "version": "1.0.0",
   "description": "AI图像搜索项目 - 中文描述转英文关键词，搜索并选择最佳图片",
-  "main": "dist/index.js",
+  "main": "backend/index.ts",
   "scripts": {
     "dev": "ts-node backend/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "postinstall": "npm run build"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "axios": "^1.6.0",

@@ -13,13 +13,11 @@
 ## 📁 项目结构
 
 ```
-ai-image-demo/
 ├── frontend/
 │   └── index.html          # 🔵 前端页面
 ├── backend/
 │   ├── index.ts            # 🔴 后端逻辑
-│   ├── .env                # API 密钥配置
-│   └── env.example         # 环境变量示例
+│   └── .env                # API 密钥配置
 ├── package.json            # 项目配置
 ├── tsconfig.json           # TypeScript 配置
 └── README.md               # 项目说明
@@ -30,7 +28,6 @@ ai-image-demo/
 ### 1. 安装依赖
 
 ```bash
-cd ai-image-demo
 npm install
 ```
 
@@ -63,6 +60,7 @@ npm run dev
 
 ## 🔧 API 端点
 
+- `GET /` - 前端页面
 - `GET /health` - 健康检查
 - `POST /search-images` - 图片搜索（主要功能）
 
@@ -96,4 +94,4 @@ MIT License
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！ 
+欢迎提交 Issue 和 Pull Request！
