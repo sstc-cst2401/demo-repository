@@ -9,14 +9,6 @@ import path from 'path';
 // 加载环境变量
 dotenv.config({ path: './backend/.env' });
 
-// 调试环境变量
-console.log('🔧 环境变量检查:');
-console.log(`   OpenAI API Key: ${process.env.OPENAI_API_KEY ? '已配置' : '未配置'}`);
-console.log(`   Unsplash Access Key: ${process.env.UNSPLASH_ACCESS_KEY ? '已配置' : '未配置'}`);
-console.log(`   Unsplash Secret Key: ${process.env.UNSPLASH_SECRET_KEY ? '已配置' : '未配置'}`);
-console.log(`   HTTP Proxy: ${process.env.HTTP_PROXY || '未配置'}`);
-console.log(`   HTTPS Proxy: ${process.env.HTTPS_PROXY || '未配置'}`);
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -159,29 +151,59 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "o4-mini",
             messages: [
                 {
                     role: "system",
-                    content: `你是一个专业的图像搜索专家。你的任务是：
-1. 首先分析用户的中文描述，理解用户想要什么样的图片（风格、主题、情感、场景等）
-2. 然后基于这个理解，生成最适合图像搜索的英文关键词
+                    content: `Extract a single, highly relevant keyword from a user's description of their intended image use, to be used as an image search term.
 
-关键词要求：
-- 简洁准确，包含主要视觉元素
-- 考虑图片的风格、主题、情感、场景、颜色等
-- 使用常见的图像搜索词汇
-- 避免过于抽象的描述，专注于可视觉化的元素
+- Read the user's description of the desired picture use carefully.
+- Determine the main subject, concept, or object central to the intended image use.
+- Think through the reasoning step-by-step before you choose the keyword: identify significant nouns or concepts, consider which one best represents the core of the query, and select the most informative and concise word.
+- Output only the single most relevant keyword. Do not add any explanation or extra words.
+- If the input contains multiple subjects or is ambiguous, choose the term that would best yield effective search results.
+- If the core subject is a phrase (e.g., 'red apple'), output it as-is; otherwise, provide the single word.
 
-只返回英文关键词，不要其他解释。`
+**Output Format:**
+- Return only a single word or phrase most suited for image searching, with no additional text, in plain text (no quotation marks or formatting).
+
+**Example 1**
+Input: I need an image that can be used in a healthy eating brochure.
+
+Reasoning: 
+- The key concept is "Healthy Eating"  
+- Most central noun: "Healthy Eating"  
+- Best keyword: "Healthy Eating"  
+Output: Healthy Eating
+
+**Example 2**
+Input: Need an image suitable for creating a company annual meeting invitation.
+
+Reasoning:
+- Main use: "Company Annual Meeting Invitation"
+- Central concept: "Annual Meeting"
+- Best keyword: "Annual Meeting"
+
+Output: Annual Meeting
+
+**Example 3**  
+Input: I want to find an image that represents success to motivate employees.  
+
+Reasoning:  
+- Main idea: "success"  
+- Intended use: employee motivation  
+- Best keyword representing concept: "success"  
+
+Output: Success  
+
+_Reminder: The task is to extract the best single keyword or phrase (no more than 3-4 characters if possible) for image searching; always reason step-by-step before making your final selection; output only the keyword/phrase, nothing else.`
                 },
                 {
                     role: "user",
                     content: `请分析以下中文描述并生成英文搜索关键词：${chineseDescription}`
                 }
             ],
-            max_tokens: 1500,
-            temperature: 0.3
+            max_completion_tokens: 1500
         });
 
         const keywords = response.choices[0].message.content?.trim();
@@ -198,9 +220,6 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
 // 搜索 Unsplash 图片
 async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> {
-    console.log(`🔍 开始搜索关键词: ${keywords}`);
-    console.log(`🔑 Unsplash Access Key: ${UNSPLASH_ACCESS_KEY ? '已配置' : '未配置'}`);
-    
     if (!UNSPLASH_ACCESS_KEY) {
         throw new Error('Unsplash Access Key 未配置');
     }
@@ -217,15 +236,10 @@ async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> 
             }
         });
 
-        console.log(`✅ Unsplash 搜索成功，找到 ${response.data.results.length} 张图片`);
         return response.data.results;
-    } catch (error: any) {
-        console.error('❌ Unsplash 搜索失败:', error.message);
-        if (error.response) {
-            console.error('响应状态:', error.response.status);
-            console.error('响应数据:', error.response.data);
-        }
-        throw new Error(`Unsplash 图片搜索失败: ${error.message}`);
+    } catch (error) {
+        console.error('Unsplash 搜索失败:', error);
+        throw new Error('Unsplash 图片搜索失败');
     }
 }
 
@@ -250,29 +264,33 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
         }).join('\n\n');
 
         const response = await openai.chat.completions.create({
-            model: "gpt-o3",
+            model: "o4-mini",
             messages: [
                 {
                     role: "system",
-                    content: `你是一个专业的图像选择专家。你的任务是：
-1. 仔细查看用户提供的所有图片
-2. 分析每张图片的视觉内容、风格、主题、情感等
-3. 根据用户的中文描述，选择最符合用户需求的图片
+                    content: `You are a senior web-page designer.
 
-选择标准：
-- 图片内容与用户描述的主题匹配度
-- 图片风格和情感与用户需求的一致性
-- 图片质量和视觉效果
-- 整体符合度（综合考虑所有因素）
+Task
+1. The user gives you N images (numbered 1 … N) and describes the usage scenario.  
+2. Silently (internally) perform step-by-step reasoning:
+   • Infer the visual requirements from the scenario (environment, style, content, size, colour, atmosphere, etc.).  
+   • List concrete selection criteria.  
+   • Rank these criteria from most to least important (ignore resolution and copyright).  
+   • Evaluate every image against every criterion in order, eliminating candidates until only one remains.  
+3. DO NOT reveal your reasoning.  
+4. Output a single line of valid JSON that contains only the index (1-based) of the best image.
 
-请仔细分析每张图片，然后选择最符合用户描述的一张。只返回图片编号（1-${images.length}），不要其他解释。`
+Output format (must be exact)
+\`\`\`json
+{"best_image_index": X}
+\`\`\``
                 },
                 {
                     role: "user",
                     content: [
                         {
                             type: "text",
-                            text: `用户描述：${originalDescription}\n\n请查看以下图片并选择最符合描述的图片编号（1-${images.length}）：`
+                            text: `Usage scenario: ${originalDescription}\n\nPlease evaluate the following ${images.length} images and select the best one:`
                         },
                         ...images.map(image => ({
                             type: "image_url" as const,
@@ -283,8 +301,7 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
                     ]
                 }
             ],
-            max_tokens: 1000,
-            temperature: 0.1
+            max_completion_tokens: 1000
         });
 
         const result = response.choices[0].message.content?.trim();
@@ -292,7 +309,18 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
             return 0; // 默认选择第一张
         }
 
-        // 解析返回的编号
+        // 尝试解析JSON格式的返回结果
+        try {
+            const jsonResult = JSON.parse(result);
+            if (jsonResult.best_image_index && typeof jsonResult.best_image_index === 'number') {
+                const index = jsonResult.best_image_index - 1; // 转换为0基索引
+                return Math.max(0, Math.min(index, images.length - 1));
+            }
+        } catch (parseError) {
+            console.log('JSON解析失败，尝试解析数字:', parseError);
+        }
+
+        // 如果JSON解析失败，回退到数字解析
         const match = result.match(/\d+/);
         if (match) {
             const index = parseInt(match[0]) - 1;
@@ -302,52 +330,6 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
         return 0; // 默认选择第一张
     } catch (error) {
         console.error('选择最佳图片失败:', error);
-        
-        // 如果GPT-4 Vision不可用，回退到基于描述的选择
-        console.log('回退到基于描述的选择方法');
-        return await selectBestImageFallback(originalDescription, images);
-    }
-}
-
-// 回退方法：基于图片描述选择最佳图片
-async function selectBestImageFallback(originalDescription: string, images: UnsplashImage[]): Promise<number> {
-    try {
-        // 构建图片描述列表
-        const imageDescriptions = images.map((image, index) => 
-            `${index + 1}. ${image.alt_description || image.description || '无描述'}`
-        ).join('\n');
-
-        const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [
-                {
-                    role: "system",
-                    content: "你是一个专业的图像选择专家。请根据用户的中文描述，从提供的图片列表中选择最符合描述的一张图片。只返回图片编号（1-8），不要其他解释。"
-                },
-                {
-                    role: "user",
-                    content: `用户描述：${originalDescription}\n\n可选图片：\n${imageDescriptions}\n\n请选择最符合描述的图片编号（1-${images.length}）：`
-                }
-            ],
-            max_tokens: 10,
-            temperature: 0.1
-        });
-
-        const result = response.choices[0].message.content?.trim();
-        if (!result) {
-            return 0; // 默认选择第一张
-        }
-
-        // 解析返回的编号
-        const match = result.match(/\d+/);
-        if (match) {
-            const index = parseInt(match[0]) - 1;
-            return Math.max(0, Math.min(index, images.length - 1));
-        }
-
-        return 0; // 默认选择第一张
-    } catch (error) {
-        console.error('回退选择方法也失败:', error);
         return 0; // 出错时默认选择第一张
     }
 }
@@ -364,12 +346,11 @@ app.use((req, res) => {
 });
 
 // 启动服务器
-const server = app.listen(Number(PORT), '0.0.0.0', () => {
+app.listen(PORT, () => {
     console.log(`🚀 AI图像搜索器服务已启动`);
-    console.log(`📍 服务地址: http://0.0.0.0:${PORT}`);
-    console.log(`🔍 健康检查: http://0.0.0.0:${PORT}/health`);
-    console.log(`🎨 图片搜索: POST http://0.0.0.0:${PORT}/search-images`);
-    console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`📍 服务地址: http://localhost:${PORT}`);
+    console.log(`🔍 健康检查: http://localhost:${PORT}/health`);
+    console.log(`🎨 图片搜索: POST http://localhost:${PORT}/search-images`);
     
     // 检查环境变量
     if (!process.env.OPENAI_API_KEY) {
@@ -378,15 +359,6 @@ const server = app.listen(Number(PORT), '0.0.0.0', () => {
     if (!process.env.UNSPLASH_ACCESS_KEY) {
         console.warn('⚠️  Unsplash Access Key 未配置，图片搜索功能将不可用');
     }
-});
-
-// 优雅关闭
-process.on('SIGTERM', () => {
-    console.log('收到 SIGTERM 信号，正在关闭服务器...');
-    server.close(() => {
-        console.log('服务器已关闭');
-        process.exit(0);
-    });
 });
 
 export default app;
