@@ -77,6 +77,12 @@ interface ProcessedImage {
     isBest: boolean;
 }
 
+interface SearchResult {
+    images: UnsplashImage[];
+    totalPages: number;
+    qualityCheckPassed: boolean;
+}
+
 // 健康检查端点
 app.get('/health', (req, res) => {
     res.json({ 
@@ -101,16 +107,16 @@ app.post('/search-images', async (req, res) => {
         const englishKeywords = await translateToEnglish(description);
         console.log(`翻译结果: ${englishKeywords}`);
 
-        // 步骤2: 用 Unsplash API 搜索图片
-        const images = await searchUnsplashImages(englishKeywords);
-        console.log(`找到 ${images.length} 张图片`);
+        // 步骤2: 搜索图片并进行质量验证，最多搜索2页
+        const searchResult = await searchImagesWithValidation(description, englishKeywords);
+        console.log(`搜索完成，共搜索 ${searchResult.totalPages} 页，找到 ${searchResult.images.length} 张图片`);
 
         // 步骤3: 用 OpenAI 选择最佳图片
-        const bestImageIndex = await selectBestImage(description, images);
+        const bestImageIndex = await selectBestImage(description, searchResult.images);
         console.log(`最佳图片索引: ${bestImageIndex}`);
 
         // 步骤4: 处理结果
-        const processedImages = images.map((image, index) => ({
+        const processedImages = searchResult.images.map((image, index) => ({
             id: image.id,
             url: image.urls.regular,
             title: image.alt_description || image.description || englishKeywords,
@@ -124,7 +130,11 @@ app.post('/search-images', async (req, res) => {
             translation: englishKeywords,
             images: processedImages,
             totalCount: processedImages.length,
-            bestImageIndex: bestImageIndex
+            bestImageIndex: bestImageIndex,
+            searchInfo: {
+                totalPages: searchResult.totalPages,
+                qualityCheckPassed: searchResult.qualityCheckPassed
+            }
         });
 
     } catch (error) {
@@ -143,6 +153,63 @@ app.post('/search-images', async (req, res) => {
     }
 });
 
+// 不满意按钮端点 - 搜索下一页
+app.post('/search-next-page', async (req, res) => {
+    try {
+        const { description, keywords, page = 2 }: { description: string; keywords: string; page?: number } = req.body;
+
+        if (!description || !keywords) {
+            return res.status(400).json({ error: '请提供描述和关键词' });
+        }
+
+        console.log(`收到不满意请求，搜索第 ${page} 页，关键词: ${keywords}`);
+
+        // 搜索指定页面
+        const pageImages = await searchUnsplashImages(keywords, page);
+        console.log(`第 ${page} 页找到 ${pageImages.length} 张图片`);
+
+        if (pageImages.length === 0) {
+            return res.status(404).json({ error: `第 ${page} 页没有更多图片了` });
+        }
+
+        // 对页面图片进行质量验证
+        const qualityResult = await validateImageQuality(description, pageImages);
+        console.log(`第 ${page} 页质量验证结果: ${qualityResult.passed ? '通过' : '未通过'}`);
+
+        // 选择最佳图片
+        const bestImageIndex = await selectBestImage(description, pageImages);
+        console.log(`第 ${page} 页最佳图片索引: ${bestImageIndex}`);
+
+        // 处理结果
+        const processedImages = pageImages.map((image, index) => ({
+            id: image.id,
+            url: image.urls.regular,
+            title: image.alt_description || image.description || keywords,
+            description: `摄影师: ${image.user.name}`,
+            photographer: image.user.name,
+            isBest: index === bestImageIndex
+        }));
+
+        res.json({
+            originalDescription: description,
+            translation: keywords,
+            images: processedImages,
+            totalCount: processedImages.length,
+            bestImageIndex: bestImageIndex,
+            searchInfo: {
+                totalPages: page,
+                qualityCheckPassed: qualityResult.passed,
+                currentPage: page,
+                hasMorePages: pageImages.length === 8 // 如果返回8张图片，说明可能还有更多页
+            }
+        });
+
+    } catch (error) {
+        console.error('搜索下一页时出错:', error);
+        res.status(500).json({ error: '搜索下一页时发生错误，请稍后重试' });
+    }
+});
+
 // 中文翻译成英文关键词
 async function translateToEnglish(chineseDescription: string): Promise<string> {
     if (!process.env.OPENAI_API_KEY) {
@@ -151,7 +218,7 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: "o4-mini",
+            model: "gpt-5-nano",
             messages: [
                 {
                     role: "system",
@@ -159,10 +226,13 @@ async function translateToEnglish(chineseDescription: string): Promise<string> {
 
 - Read the user's description of the desired picture use carefully.
 - Determine the main subject, concept, or object central to the intended image use.
+- Consider visual elements that would make the image more searchable: colors, styles, moods, settings, or specific visual characteristics.
 - Think through the reasoning step-by-step before you choose the keyword: identify significant nouns or concepts, consider which one best represents the core of the query, and select the most informative and concise word.
 - Output only the single most relevant keyword. Do not add any explanation or extra words.
 - If the input contains multiple subjects or is ambiguous, choose the term that would best yield effective search results.
 - If the core subject is a phrase (e.g., 'red apple'), output it as-is; otherwise, provide the single word.
+- If the keywords have corresponding proper nouns, please use the proper nouns.
+- Consider including visual modifiers that would improve search results (e.g., 'sunset', 'modern', 'vintage', 'minimalist').
 
 **Output Format:**
 - Return only a single word or phrase most suited for image searching, with no additional text, in plain text (no quotation marks or formatting).
@@ -172,6 +242,7 @@ Input: I need an image that can be used in a healthy eating brochure.
 
 Reasoning: 
 - The key concept is "Healthy Eating"  
+- Visual context: fresh, appetizing food presentation
 - Most central noun: "Healthy Eating"  
 - Best keyword: "Healthy Eating"  
 Output: Healthy Eating
@@ -181,6 +252,7 @@ Input: Need an image suitable for creating a company annual meeting invitation.
 
 Reasoning:
 - Main use: "Company Annual Meeting Invitation"
+- Visual context: professional, corporate setting
 - Central concept: "Annual Meeting"
 - Best keyword: "Annual Meeting"
 
@@ -191,12 +263,33 @@ Input: I want to find an image that represents success to motivate employees.
 
 Reasoning:  
 - Main idea: "success"  
+- Visual context: motivational, inspiring imagery
 - Intended use: employee motivation  
 - Best keyword representing concept: "success"  
 
 Output: Success  
 
-_Reminder: The task is to extract the best single keyword or phrase (no more than 3-4 characters if possible) for image searching; always reason step-by-step before making your final selection; output only the keyword/phrase, nothing else.`
+**Example 4**
+Input: 需要一个现代简约风格的办公桌图片
+
+Reasoning:
+- Main subject: "办公桌" (desk)
+- Visual style: "现代简约" (modern minimalist)
+- Best keyword: "modern desk"
+
+Output: modern desk
+
+**Example 5**
+Input: 我想在电商平台卖陨石边牧
+
+Reasoning:
+- Main subject: "陨石边牧"
+- Best keyword: "Merle Border Collie"
+
+Output: Merle Border Collie
+
+
+_Reminder: The task is to extract the best single keyword or phrase for image searching; always reason step-by-step before making your final selection; consider visual elements that would improve search results; output only the keyword/phrase, nothing else.`
                 },
                 {
                     role: "user",
@@ -219,7 +312,7 @@ _Reminder: The task is to extract the best single keyword or phrase (no more tha
 }
 
 // 搜索 Unsplash 图片
-async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> {
+async function searchUnsplashImages(keywords: string, page: number = 1): Promise<UnsplashImage[]> {
     if (!UNSPLASH_ACCESS_KEY) {
         throw new Error('Unsplash Access Key 未配置');
     }
@@ -232,7 +325,8 @@ async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> 
             params: {
                 query: keywords,
                 per_page: 8,
-                orientation: 'landscape'
+                orientation: 'landscape',
+                page: page
             }
         });
 
@@ -240,6 +334,177 @@ async function searchUnsplashImages(keywords: string): Promise<UnsplashImage[]> 
     } catch (error) {
         console.error('Unsplash 搜索失败:', error);
         throw new Error('Unsplash 图片搜索失败');
+    }
+}
+
+// 搜索图片并进行质量验证
+async function searchImagesWithValidation(originalDescription: string, keywords: string): Promise<SearchResult> {
+    const maxPages = 2;
+    let allImages: UnsplashImage[] = [];
+    let currentPage = 1;
+    let qualityCheckPassed = false;
+
+    while (currentPage <= maxPages && !qualityCheckPassed) {
+        console.log(`正在搜索第 ${currentPage} 页...`);
+        
+        // 搜索当前页面的图片
+        const pageImages = await searchUnsplashImages(keywords, currentPage);
+        
+        if (pageImages.length === 0) {
+            console.log(`第 ${currentPage} 页没有找到图片，停止搜索`);
+            break;
+        }
+
+        // 将当前页面的图片添加到总列表中
+        allImages = [...allImages, ...pageImages];
+        
+        // 对当前页面的图片进行质量验证
+        const qualityResult = await validateImageQuality(originalDescription, pageImages);
+        
+        if (qualityResult.passed) {
+            console.log(`第 ${currentPage} 页图片质量验证通过`);
+            qualityCheckPassed = true;
+            // 只保留当前页面的图片，因为质量已经满足要求
+            allImages = pageImages;
+        } else {
+            console.log(`第 ${currentPage} 页图片质量验证未通过，继续搜索下一页`);
+            // 如果还有下一页，继续搜索
+            if (currentPage < maxPages) {
+                currentPage++;
+            } else {
+                console.log(`已达到最大搜索页数 ${maxPages}，使用当前最合适的图片`);
+                // 达到最大页数时，使用验证函数返回的最合适图片
+                allImages = qualityResult.bestImages || pageImages;
+                qualityCheckPassed = true;
+            }
+        }
+    }
+
+    return {
+        images: allImages,
+        totalPages: currentPage,
+        qualityCheckPassed: qualityCheckPassed
+    };
+}
+
+// 验证图片质量
+async function validateImageQuality(originalDescription: string, images: UnsplashImage[]): Promise<{
+    passed: boolean;
+    bestImages?: UnsplashImage[];
+}> {
+    if (!process.env.OPENAI_API_KEY) {
+        // 如果没有配置OpenAI，默认通过
+        console.log('⚠️  OpenAI API 密钥未配置，跳过质量验证');
+        return { passed: true };
+    }
+
+    if (images.length === 0) {
+        console.log('❌ 没有图片可验证');
+        return { passed: false };
+    }
+
+    console.log(`🔍 开始验证 ${images.length} 张图片的质量...`);
+
+    try {
+        // 构建图片信息用于质量评估
+        const imageDetails = images.map((image, index) => {
+            const description = image.alt_description || image.description || '无描述';
+            const photographer = image.user.name;
+            const imageUrl = image.urls.regular;
+            
+            return `${index + 1}. 图片URL: ${imageUrl}\n   描述: ${description}\n   摄影师: ${photographer}`;
+        }).join('\n\n');
+
+        const response = await openai.chat.completions.create({
+            model: "gpt-5-nano",
+            messages: [
+                {
+                    role: "system",
+                    content: `你是一个专业的图片质量评估专家。
+
+任务：
+1. 用户会提供使用场景描述和一组图片
+2. 你需要评估这些图片是否满足用户的需求
+3. 如果图片质量满足要求，返回通过
+4. 如果图片质量不满足要求，返回不通过，并选择最合适的几张图片
+
+评估标准：
+- 图片内容是否与用户需求相关
+- 图片质量是否足够好（清晰度、构图等）
+- 图片风格是否适合用户的使用场景
+- 图片是否具有商业使用价值
+
+输出格式（必须是有效的JSON）：
+\`\`\`json
+{
+  "passed": true/false,
+  "reason": "通过/不通过的原因",
+  "best_images": [图片索引数组，从1开始，如果passed为true则为空数组]
+}
+\`\`\`
+
+注意：
+- 如果passed为false，best_images必须包含最合适的图片索引
+- 图片索引从1开始计数
+- 只输出JSON，不要有其他文字`
+                },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: `使用场景: ${originalDescription}\n\n请评估以下 ${images.length} 张图片的质量：`
+                        },
+                        ...images.map(image => ({
+                            type: "image_url" as const,
+                            image_url: {
+                                url: image.urls.regular
+                            }
+                        }))
+                    ]
+                }
+            ],
+            max_completion_tokens: 1000
+        });
+
+        const result = response.choices[0].message.content?.trim();
+        if (!result) {
+            console.log('⚠️  AI返回结果为空，默认通过');
+            return { passed: true }; // 默认通过
+        }
+
+        console.log(`🤖 AI质量评估结果: ${result}`);
+
+        // 解析JSON结果
+        try {
+            const jsonResult = JSON.parse(result);
+            
+            if (jsonResult.passed === true) {
+                console.log(`✅ 质量验证通过: ${jsonResult.reason || '图片质量满足要求'}`);
+                return { passed: true };
+            } else if (jsonResult.passed === false && jsonResult.best_images) {
+                console.log(`❌ 质量验证未通过: ${jsonResult.reason || '图片质量不满足要求'}`);
+                console.log(`📋 选择的最佳图片索引: ${jsonResult.best_images.join(', ')}`);
+                
+                // 选择最合适的图片
+                const bestImages = jsonResult.best_images
+                    .map((index: number) => images[index - 1])
+                    .filter(Boolean);
+                
+                return { 
+                    passed: false, 
+                    bestImages: bestImages.length > 0 ? bestImages : images 
+                };
+            }
+        } catch (parseError) {
+            console.log('❌ JSON解析失败:', parseError);
+        }
+
+        console.log('⚠️ 解析失败，默认通过');
+        return { passed: true }; // 解析失败时默认通过
+    } catch (error) {
+        console.error('❌ 图片质量验证失败:', error);
+        return { passed: true }; // 出错时默认通过
     }
 }
 
@@ -264,7 +529,7 @@ async function selectBestImage(originalDescription: string, images: UnsplashImag
         }).join('\n\n');
 
         const response = await openai.chat.completions.create({
-            model: "o4-mini",
+            model: "gpt-5-nano",
             messages: [
                 {
                     role: "system",
